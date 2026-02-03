@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PU Blind Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="blob blob-1"></div>
+<div class="blob blob-2"></div>
+
+<div class="app-container glass">
+
+  <!-- EMAIL -->
+  <div id="email-screen" class="screen active">
+    <h2 class="screen-title">Enter anonymously</h2>
+    <p class="screen-subtitle">Only Pondicherry University students</p>
+
+    <input id="emailInput" type="email" placeholder="yourname@pondiuni.ac.in" />
+    <button id="sendOtpBtn" class="primary-btn">Continue</button>
+
+    <p class="tiny-note">
+      Chats aren’t stored. Identity revealed only with mutual consent.
+    </p>
+  </div>
+
+  <!-- OTP -->
+  <div id="otp-screen" class="screen">
+    <h2 class="screen-title">Verify OTP</h2>
+    <input id="otpInput" type="text" placeholder="Enter OTP" />
+    <button id="verifyOtpBtn" class="primary-btn">Verify</button>
+  </div>
+
+  <!-- START -->
+  <div id="start-screen" class="screen">
+    <button id="startBtn" class="primary-btn">Start Chat</button>
+  </div>
+
+  <!-- CONNECTING -->
+  <div id="connecting-screen" class="screen">
+    <p class="status">Connecting you to someone…</p>
+  </div>
+
+  <!-- CHAT -->
+  <div id="chat-screen" class="screen">
+    <div class="chat-header">
+      <span class="status-pill">Anonymous • Online</span>
+    </div>
+
+    <div class="chat-box" id="chatBox"></div>
+
+    <div class="chat-input">
+      <input id="messageInput" placeholder="Type a message…" />
+      <button id="sendBtn">Send</button>
+    </div>
+
+    <div class="chat-actions">
+      <button id="revealBtn" class="secondary-btn">Reveal Me</button>
+      <button id="nextBtn" class="danger-btn">Next</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
