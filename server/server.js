@@ -2,141 +2,164 @@ require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const path = require("path");
 const nodemailer = require("nodemailer");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+/* =========================
+   CONFIG
+========================= */
+
+const PORT = process.env.PORT || 3000;
+const OTP_EXPIRY_MINUTES = parseInt(process.env.OTP_EXPIRY_MINUTES || "5");
+const OTP_COOLDOWN_SECONDS = parseInt(process.env.OTP_COOLDOWN_SECONDS || "60");
+
+/* =========================
+   MIDDLEWARE
+========================= */
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// 🔴 IMPORTANT: Serve frontend correctly (Render fix)
 app.use(express.static(path.join(__dirname, "../public")));
 
-const waiting = [];
-const users = {};     // socket.id -> email
-const otps = {};      // socket.id -> { code, expiresAt, lastSent }
+// 🔴 IMPORTANT: Explicit root route
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
+/* =========================
+   EMAIL (OTP)
+========================= */
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+const otps = {}; // { email: { code, expiresAt, lastSent } }
+
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+app.post("/send-otp", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email || !email.endsWith("@pondiuni.ac.in")) {
+    return res.status(400).json({ error: "Invalid university email" });
+  }
+
+  const now = Date.now();
+  const existing = otps[email];
+
+  if (
+    existing &&
+    existing.lastSent &&
+    now - existing.lastSent < OTP_COOLDOWN_SECONDS * 1000
+  ) {
+    return res.status(429).json({
+      error: "Please wait before requesting another OTP",
+    });
+  }
+
+  const otp = generateOTP();
+
+  otps[email] = {
+    code: otp,
+    expiresAt: now + OTP_EXPIRY_MINUTES * 60 * 1000,
+    lastSent: now,
+  };
+
+  try {
+    await transporter.sendMail({
+      from: `PU Blind Chat <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Your OTP for PU Blind Chat",
+      text: `Your OTP is ${otp}. It will expire in ${OTP_EXPIRY_MINUTES} minutes.`,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Email error:", err);
+    res.status(500).json({ error: "Failed to send OTP" });
   }
 });
 
+app.post("/verify-otp", (req, res) => {
+  const { email, otp } = req.body;
+
+  const record = otps[email];
+
+  if (!record) {
+    return res.status(400).json({ error: "OTP not found" });
+  }
+
+  if (Date.now() > record.expiresAt) {
+    delete otps[email];
+    return res.status(400).json({ error: "OTP expired" });
+  }
+
+  if (record.code !== otp) {
+    return res.status(400).json({ error: "Incorrect OTP" });
+  }
+
+  delete otps[email];
+  res.json({ success: true });
+});
+
+/* =========================
+   SOCKET.IO (CHAT)
+========================= */
+
+let waitingUser = null;
+
 io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
 
-  // SEND OTP
-  socket.on("send-otp", async (email) => {
-    if (!email || !email.endsWith("@pondiuni.ac.in")) {
-      socket.emit("otp-error", "Only Pondicherry University emails allowed");
-      return;
-    }
+  if (waitingUser) {
+    socket.partner = waitingUser;
+    waitingUser.partner = socket;
 
-    const now = Date.now();
-    const cooldown = Number(process.env.OTP_COOLDOWN_SECONDS) * 1000;
+    socket.emit("matched");
+    waitingUser.emit("matched");
 
-    if (otps[socket.id]?.lastSent && now - otps[socket.id].lastSent < cooldown) {
-      socket.emit("otp-error", "Please wait before requesting another OTP");
-      return;
-    }
+    waitingUser = null;
+  } else {
+    waitingUser = socket;
+    socket.emit("waiting");
+  }
 
-    const otp = Math.floor(100000 + Math.random() * 900000);
-    const expiry = now + Number(process.env.OTP_EXPIRY_MINUTES) * 60 * 1000;
-
-    otps[socket.id] = { code: otp, expiresAt: expiry, lastSent: now };
-    users[socket.id] = email;
-
-    await transporter.sendMail({
-      from: `"PU Blind Chat" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: "Your PU Blind Chat OTP",
-      html: `
-        <h2>PU Blind Chat</h2>
-        <p>Your OTP is:</p>
-        <h1>${otp}</h1>
-        <p>Valid for ${process.env.OTP_EXPIRY_MINUTES} minutes.</p>
-      `
-    });
-
-    socket.emit("otp-sent");
-  });
-
-  // VERIFY OTP
-  socket.on("verify-otp", (code) => {
-    const record = otps[socket.id];
-    if (!record) return socket.emit("otp-error", "OTP expired");
-
-    if (Date.now() > record.expiresAt) {
-      delete otps[socket.id];
-      return socket.emit("otp-error", "OTP expired");
-    }
-
-    if (Number(code) !== record.code) {
-      return socket.emit("otp-error", "Invalid OTP");
-    }
-
-    delete otps[socket.id];
-    socket.verified = true;
-    socket.emit("verified");
-  });
-
-  // START CHAT
-  socket.on("start-chat", () => {
-    if (!socket.verified) return;
-
-    if (waiting.length > 0) {
-      const partner = waiting.pop();
-      socket.partner = partner;
-      partner.partner = socket;
-
-      socket.emit("matched");
-      partner.emit("matched");
-    } else {
-      waiting.push(socket);
-    }
-  });
-
-  // MESSAGE
-  socket.on("send-message", (msg) => {
-    socket.partner?.emit("receive-message", msg);
-  });
-
-  // REVEAL (mutual)
-  socket.on("request-reveal", () => {
-    if (!socket.partner) return;
-
-    socket.reveal = true;
-    if (socket.partner.reveal) {
-      socket.emit("reveal-success", { email: users[socket.partner.id] });
-      socket.partner.emit("reveal-success", { email: users[socket.id] });
-      socket.reveal = socket.partner.reveal = false;
-    }
-  });
-
-  // NEXT
-  socket.on("next-chat", () => {
+  socket.on("message", (msg) => {
     if (socket.partner) {
-      socket.partner.partner = null;
-      socket.partner.emit("partner-left");
-      socket.partner = null;
+      socket.partner.emit("message", msg);
     }
-    socket.emit("reset");
   });
 
-  // DISCONNECT
   socket.on("disconnect", () => {
+    if (waitingUser === socket) {
+      waitingUser = null;
+    }
     if (socket.partner) {
-      socket.partner.emit("partner-left");
+      socket.partner.emit("partner-disconnected");
       socket.partner.partner = null;
     }
+    console.log("User disconnected:", socket.id);
   });
 });
 
-const PORT = process.env.PORT || 3000;
+/* =========================
+   START SERVER
+========================= */
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
