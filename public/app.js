@@ -1,65 +1,131 @@
-console.log("app.js loaded");
-
-const socket = io();
-
-const screens = {
-  email: "email-screen",
-  otp: "otp-screen",
-  start: "start-screen",
-  connect: "connecting-screen",
-  chat: "chat-screen"
-};
-
-function show(name) {
-  Object.values(screens).forEach(id =>
-    document.getElementById(id).classList.remove("active")
-  );
-  document.getElementById(screens[name]).classList.add("active");
+/* =========================
+   SCREEN HANDLER
+========================= */
+function showScreen(id) {
+  document.querySelectorAll(".screen").forEach(s => {
+    s.classList.remove("active");
+  });
+  document.getElementById(id).classList.add("active");
 }
 
-document.getElementById("sendOtpBtn").onclick = () =>
-  socket.emit("send-otp", emailInput.value.trim());
+/* =========================
+   EMAIL → SEND OTP
+========================= */
+const emailInput = document.getElementById("emailInput");
+const sendOtpBtn = document.getElementById("sendOtpBtn");
 
-document.getElementById("verifyOtpBtn").onclick = () =>
-  socket.emit("verify-otp", otpInput.value.trim());
+sendOtpBtn.addEventListener("click", async () => {
+  const email = emailInput.value.trim();
 
-document.getElementById("startBtn").onclick = () => {
-  show("connect");
-  socket.emit("start-chat");
-};
+  if (!email) {
+    alert("Please enter your email");
+    return;
+  }
 
-document.getElementById("sendBtn").onclick = () => {
-  const msg = messageInput.value.trim();
-  if (!msg) return;
-  add(msg, "sent");
-  socket.emit("send-message", msg);
-  messageInput.value = "";
-};
+  if (!email.endsWith("@pondiuni.ac.in")) {
+    alert("Only Pondicherry University emails allowed");
+    return;
+  }
 
-document.getElementById("nextBtn").onclick = () => {
-  chatBox.innerHTML = "";
-  show("connect");
-  socket.emit("next-chat");
-};
+  sendOtpBtn.disabled = true;
+  sendOtpBtn.innerText = "Sending OTP...";
 
-document.getElementById("revealBtn").onclick = () =>
-  socket.emit("request-reveal");
+  try {
+    const res = await fetch("/send-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
 
-socket.on("otp-sent", () => show("otp"));
-socket.on("verified", () => show("start"));
-socket.on("matched", () => show("chat"));
-socket.on("receive-message", m => add(m, "received"));
-socket.on("reveal-success", d => system(`Revealed: ${d.email}`));
-socket.on("partner-left", () => system("Partner disconnected"));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to send OTP");
 
-function add(text, cls) {
-  const d = document.createElement("div");
-  d.className = `message ${cls}`;
-  d.innerText = text;
-  chatBox.appendChild(d);
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
+    showScreen("otp-screen");
+  } catch (err) {
+    alert(err.message || "Server error");
+  } finally {
+    sendOtpBtn.disabled = false;
+    sendOtpBtn.innerText = "Continue";
+  }
+});
 
-function system(text) {
-  add(text, "received");
-}
+/* =========================
+   VERIFY OTP
+========================= */
+const otpInput = document.getElementById("otpInput");
+const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+
+verifyOtpBtn.addEventListener("click", async () => {
+  const otp = otpInput.value.trim();
+  const email = emailInput.value.trim();
+
+  if (!otp) {
+    alert("Enter the OTP");
+    return;
+  }
+
+  verifyOtpBtn.disabled = true;
+  verifyOtpBtn.innerText = "Verifying...";
+
+  try {
+    const res = await fetch("/verify-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "OTP verification failed");
+
+    showScreen("start-screen");
+  } catch (err) {
+    alert(err.message || "OTP verification failed");
+  } finally {
+    verifyOtpBtn.disabled = false;
+    verifyOtpBtn.innerText = "Verify";
+  }
+});
+
+/* =========================
+   START CHAT
+========================= */
+const startBtn = document.getElementById("startBtn");
+
+let socket = null;
+
+startBtn.addEventListener("click", () => {
+  showScreen("connecting-screen");
+
+  socket = io();
+
+  socket.on("waiting", () => {
+    console.log("Waiting for match...");
+  });
+
+  socket.on("matched", () => {
+    showScreen("chat-screen");
+  });
+
+  socket.on("message", (msg) => {
+    addMessage(msg, "them");
+  });
+
+  socket.on("partner-disconnected", () => {
+    alert("Partner disconnected");
+    showScreen("start-screen");
+  });
+});
+
+/* =========================
+   CHAT MESSAGES
+========================= */
+const chatBox = document.getElementById("chatBox");
+const messageInput = document.getElementById("messageInput");
+const sendMessageBtn = document.getElementById("sendMessageBtn");
+
+sendMessageBtn.addEventListener("click", sendMessage);
+messageInput.addEventListener("keypress", e => {
+  if (e.key === "Enter") sendMessage();
+});
+
+function sendMessage()
