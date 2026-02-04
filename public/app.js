@@ -1,131 +1,76 @@
-/* =========================
-   SCREEN HANDLER
-========================= */
-function showScreen(id) {
-  document.querySelectorAll(".screen").forEach(s => {
-    s.classList.remove("active");
-  });
-  document.getElementById(id).classList.add("active");
-}
+document.addEventListener("DOMContentLoaded", () => {
+  alert("JS LOADED"); // 🔥 YOU MUST SEE THIS
 
-/* =========================
-   EMAIL → SEND OTP
-========================= */
-const emailInput = document.getElementById("emailInput");
-const sendOtpBtn = document.getElementById("sendOtpBtn");
+  function showScreen(id) {
+    document.querySelectorAll(".screen").forEach(s => {
+      s.classList.remove("active");
+    });
+    document.getElementById(id).classList.add("active");
+  }
 
-sendOtpBtn.addEventListener("click", async () => {
-  const email = emailInput.value.trim();
+  const emailInput = document.getElementById("emailInput");
+  const sendOtpBtn = document.getElementById("sendOtpBtn");
+  const otpInput = document.getElementById("otpInput");
+  const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+  const startBtn = document.getElementById("startBtn");
 
-  if (!email) {
-    alert("Please enter your email");
+  if (!sendOtpBtn || !verifyOtpBtn || !startBtn) {
+    alert("BUTTON IDs NOT FOUND — CHECK HTML IDS");
+    console.error({
+      sendOtpBtn,
+      verifyOtpBtn,
+      startBtn
+    });
     return;
   }
 
-  if (!email.endsWith("@pondiuni.ac.in")) {
-    alert("Only Pondicherry University emails allowed");
-    return;
-  }
+  sendOtpBtn.addEventListener("click", async () => {
+    alert("CONTINUE CLICKED");
 
-  sendOtpBtn.disabled = true;
-  sendOtpBtn.innerText = "Sending OTP...";
+    const email = emailInput.value.trim();
+    if (!email.endsWith("@pondiuni.ac.in")) {
+      alert("Invalid email");
+      return;
+    }
 
-  try {
     const res = await fetch("/send-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email })
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to send OTP");
+    if (!res.ok) {
+      alert(data.error || "OTP failed");
+      return;
+    }
 
     showScreen("otp-screen");
-  } catch (err) {
-    alert(err.message || "Server error");
-  } finally {
-    sendOtpBtn.disabled = false;
-    sendOtpBtn.innerText = "Continue";
-  }
-});
+  });
 
-/* =========================
-   VERIFY OTP
-========================= */
-const otpInput = document.getElementById("otpInput");
-const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+  verifyOtpBtn.addEventListener("click", async () => {
+    alert("VERIFY CLICKED");
 
-verifyOtpBtn.addEventListener("click", async () => {
-  const otp = otpInput.value.trim();
-  const email = emailInput.value.trim();
+    const otp = otpInput.value.trim();
+    const email = emailInput.value.trim();
 
-  if (!otp) {
-    alert("Enter the OTP");
-    return;
-  }
-
-  verifyOtpBtn.disabled = true;
-  verifyOtpBtn.innerText = "Verifying...";
-
-  try {
     const res = await fetch("/verify-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, otp }),
+      body: JSON.stringify({ email, otp })
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "OTP verification failed");
+    if (!res.ok) {
+      alert(data.error || "OTP verify failed");
+      return;
+    }
 
     showScreen("start-screen");
-  } catch (err) {
-    alert(err.message || "OTP verification failed");
-  } finally {
-    verifyOtpBtn.disabled = false;
-    verifyOtpBtn.innerText = "Verify";
-  }
-});
-
-/* =========================
-   START CHAT
-========================= */
-const startBtn = document.getElementById("startBtn");
-
-let socket = null;
-
-startBtn.addEventListener("click", () => {
-  showScreen("connecting-screen");
-
-  socket = io();
-
-  socket.on("waiting", () => {
-    console.log("Waiting for match...");
   });
 
-  socket.on("matched", () => {
-    showScreen("chat-screen");
-  });
-
-  socket.on("message", (msg) => {
-    addMessage(msg, "them");
-  });
-
-  socket.on("partner-disconnected", () => {
-    alert("Partner disconnected");
-    showScreen("start-screen");
+  startBtn.addEventListener("click", () => {
+    alert("START CHAT CLICKED");
+    showScreen("connecting-screen");
   });
 });
-
-/* =========================
-   CHAT MESSAGES
-========================= */
-const chatBox = document.getElementById("chatBox");
-const messageInput = document.getElementById("messageInput");
-const sendMessageBtn = document.getElementById("sendMessageBtn");
-
-sendMessageBtn.addEventListener("click", sendMessage);
-messageInput.addEventListener("keypress", e => {
-  if (e.key === "Enter") sendMessage();
-});
-
-function sendMessage()
