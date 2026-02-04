@@ -15,8 +15,8 @@ const io = new Server(server);
 ========================= */
 
 const PORT = process.env.PORT || 3000;
-const OTP_EXPIRY_MINUTES = parseInt(process.env.OTP_EXPIRY_MINUTES || "5");
-const OTP_COOLDOWN_SECONDS = parseInt(process.env.OTP_COOLDOWN_SECONDS || "60");
+const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 5);
+const OTP_COOLDOWN_SECONDS = Number(process.env.OTP_COOLDOWN_SECONDS || 60);
 
 /* =========================
    MIDDLEWARE
@@ -25,16 +25,15 @@ const OTP_COOLDOWN_SECONDS = parseInt(process.env.OTP_COOLDOWN_SECONDS || "60");
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 🔴 IMPORTANT: Serve frontend correctly (Render fix)
+// Serve frontend
 app.use(express.static(path.join(__dirname, "../public")));
 
-// 🔴 IMPORTANT: Explicit root route
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
 /* =========================
-   EMAIL (OTP)
+   EMAIL (NODEMAILER)
 ========================= */
 
 const transporter = nodemailer.createTransport({
@@ -45,17 +44,22 @@ const transporter = nodemailer.createTransport({
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  tls: {
-    rejectUnauthorized: false,
-  },
 });
 
+/* =========================
+   OTP STORAGE (IN-MEMORY)
+========================= */
 
-const otps = {}; // { email: { code, expiresAt, lastSent } }
+const otps = {}; 
+// email: { code, expiresAt, lastSent }
 
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
+
+/* =========================
+   SEND OTP
+========================= */
 
 app.post("/send-otp", async (req, res) => {
   const { email } = req.body;
@@ -69,7 +73,6 @@ app.post("/send-otp", async (req, res) => {
 
   if (
     existing &&
-    existing.lastSent &&
     now - existing.lastSent < OTP_COOLDOWN_SECONDS * 1000
   ) {
     return res.status(429).json({
@@ -95,10 +98,14 @@ app.post("/send-otp", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Email error:", err);
+    console.error("OTP EMAIL ERROR:", err);
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
+
+/* =========================
+   VERIFY OTP
+========================= */
 
 app.post("/verify-otp", (req, res) => {
   const { email, otp } = req.body;
@@ -123,14 +130,12 @@ app.post("/verify-otp", (req, res) => {
 });
 
 /* =========================
-   SOCKET.IO (CHAT)
+   SOCKET.IO CHAT
 ========================= */
 
 let waitingUser = null;
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
-
   if (waitingUser) {
     socket.partner = waitingUser;
     waitingUser.partner = socket;
@@ -158,7 +163,6 @@ io.on("connection", (socket) => {
       socket.partner.emit("partner-disconnected");
       socket.partner.partner = null;
     }
-    console.log("User disconnected:", socket.id);
   });
 });
 
