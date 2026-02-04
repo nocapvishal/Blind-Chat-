@@ -1,3 +1,5 @@
+console.log("app.js loaded");
+
 const socket = io();
 
 const screens = {
