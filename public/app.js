@@ -73,4 +73,4 @@ document.addEventListener("DOMContentLoaded", () => {
     alert("START CHAT CLICKED");
     showScreen("connecting-screen");
   });
-});
+}); 
