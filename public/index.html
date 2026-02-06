@@ -1,55 +1,70 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Blind Chat in Campus</title>
 <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
 <div class="app">
 
-<h1>Blind Chat in Campus</h1>
-<div id="partnerName"></div>
+<!-- SCREEN 1 : PROFILE -->
+<div id="profile-screen" class="screen active">
+  <h1>Blind Chat in Campus 💜</h1>
 
-<div id="profile-screen">
+  <input id="nickname" placeholder="Nickname">
 
-<input id="nickname" placeholder="Nickname">
+  <select id="gender">
+    <option value="Male">Male</option>
+    <option value="Female">Female</option>
+  </select>
 
-<select id="gender">
-<option value="Male">Male</option>
-<option value="Female">Female</option>
-</select>
+  <select id="prefGender">
+    <option value="Any">Match with Anyone</option>
+    <option value="Male">Male</option>
+    <option value="Female">Female</option>
+  </select>
 
-<select id="prefGender">
-<option value="Any">Match with Anyone</option>
-<option value="Male">Male</option>
-<option value="Female">Female</option>
-</select>
+  <select id="dept">
+    <option value="Any">Any Department</option>
+    <option>CSE</option>
+    <option>ECE</option>
+  </select>
 
-<select id="dept">
-<option value="Any">Any Dept</option>
-<option>CSE</option>
-<option>ECE</option>
-</select>
+  <select id="year">
+    <option value="Any">Any Year</option>
+    <option>1st Year</option>
+    <option>2nd Year</option>
+    <option>3rd Year</option>
+    <option>4th Year</option>
+  </select>
 
-<select id="year">
-<option value="Any">Any Year</option>
-<option>1</option><option>2</option><option>3</option><option>4</option>
-</select>
-
-<button id="startBtn">Start Chat</button>
-
+  <button id="startBtn">Start Chat</button>
 </div>
 
-<div id="chat-screen" style="display:none">
 
-<div id="chatBox"></div>
-<input id="msgInput" placeholder="Message… 😊">
-<button id="sendBtn">Send</button>
+<!-- SCREEN 2 : SEARCHING -->
+<div id="search-screen" class="screen">
+  <div class="loader"></div>
+  <h2>Finding someone from campus…</h2>
+</div>
 
-<button id="skipBtn">Skip</button>
 
+<!-- SCREEN 3 : CHAT -->
+<div id="chat-screen" class="screen">
+  <div class="chat-header">
+    <span id="partnerName">Connected</span>
+    <button id="skipBtn">Skip</button>
+  </div>
+
+  <div id="chatBox"></div>
+
+  <div class="chat-input">
+    <input id="msgInput" placeholder="Type message… 😊">
+    <button id="sendBtn">Send</button>
+  </div>
 </div>
 
 </div>
