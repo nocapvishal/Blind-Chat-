@@ -5,8 +5,8 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET","POST"] }
+const io = new Server(server,{
+  cors:{origin:"*"}
 });
 
 app.use(express.static("public"));
@@ -36,33 +36,21 @@ io.on("connection", socket => {
     }
   });
 
-  socket.on("typing", () => {
-    socket.partner?.emit("typing");
-  });
+  socket.on("typing", () => socket.partner?.emit("typing"));
+  socket.on("message", msg => socket.partner?.emit("message", msg));
 
-  socket.on("message", msg => {
-    socket.partner?.emit("message", msg);
-  });
-
-  socket.on("skip", () => {
+  socket.on("skip", ()=>{
     socket.partner?.emit("partner-left");
-    socket.partner = null;
-    waitingUser = socket;
+    socket.partner=null;
+    waitingUser=socket;
   });
 
-  socket.on("report", () => {
-    console.log("User reported partner");
-  });
-
-  socket.on("disconnect", () => {
+  socket.on("disconnect", ()=>{
     onlineUsers--;
     io.emit("online-count", onlineUsers);
-
-    if(waitingUser === socket) waitingUser = null;
     socket.partner?.emit("partner-left");
+    if(waitingUser===socket) waitingUser=null;
   });
 });
 
-server.listen(process.env.PORT || 3000, () =>
-  console.log("Blind Chat in Campus running 🚀")
-);
+server.listen(process.env.PORT||3000,()=>console.log("Server running 🚀"));
