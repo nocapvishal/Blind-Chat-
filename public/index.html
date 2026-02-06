@@ -1,53 +1,36 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Blind Chat in Campus</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div class="container">
+<div class="app">
 
-<!-- EMAIL LOGIN -->
-<div id="login-screen" class="screen active">
-<h2>Blind Chat in Campus</h2>
-<input id="emailInput" placeholder="yourname@pondiuni.ac.in">
-<button id="loginBtn">Continue</button>
-</div>
+<h1>Blind Chat in Campus</h1>
+<div id="onlineCount">0 online</div>
 
-<!-- PROFILE -->
-<div id="profile-screen" class="screen">
-<select id="dept"><option>Department</option><option>CSE</option><option>ECE</option></select>
-<select id="course"><option>Course</option><option>BTech</option><option>MSc</option></select>
-<select id="year"><option>Year</option><option>1</option><option>2</option><option>3</option><option>4</option></select>
-<button id="saveProfileBtn">Save</button>
-<button id="skipProfileBtn">Skip</button>
-</div>
-
-<!-- START -->
-<div id="start-screen" class="screen">
+<div id="profile-screen" class="screen active">
+<input id="nickname" placeholder="Nickname">
+<select id="gender"><option>Male</option><option>Female</option></select>
+<select id="prefGender"><option>Any</option><option>Male</option><option>Female</option></select>
+<select id="dept"><option>Any</option><option>CSE</option><option>ECE</option></select>
+<select id="year"><option>Any</option><option>1</option><option>2</option><option>3</option><option>4</option></select>
 <button id="startBtn">Start Chat</button>
 </div>
 
-<!-- CONNECTING -->
-<div id="connecting-screen" class="screen">
-<h2 id="status">Searching for another student...</h2>
-</div>
-
-<!-- CHAT -->
 <div id="chat-screen" class="screen">
-<div id="onlineCount">Online: 0</div>
 <div id="partnerName"></div>
-
 <div id="chatBox"></div>
-<div id="typingIndicator"></div>
+<div id="typing"></div>
 
-<input id="messageInput" placeholder="Type message...">
+<input id="msgInput" placeholder="Message… 😊">
 <button id="sendBtn">Send</button>
 
 <div class="actions">
 <button id="skipBtn">Skip</button>
-<button id="reportBtn">Report</button>
 <button id="revealBtn">Reveal</button>
 </div>
 </div>
