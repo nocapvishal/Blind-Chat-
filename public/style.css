@@ -1,6 +1,6 @@
 body{
  background:linear-gradient(160deg,#020617,#1e1b4b);
- color:white;font-family:Inter;text-align:center;
+ font-family:Arial;color:white;text-align:center;
 }
 
 .app{max-width:420px;margin:auto;padding:20px}
@@ -15,7 +15,8 @@ button{
  border:none;border-radius:12px;color:white;font-weight:bold;
 }
 
-#chatBox{height:50vh;overflow:auto;margin:10px 0}
+#chatBox{height:55vh;overflow:auto;margin:10px 0}
+
 .msg{padding:10px;margin:5px;border-radius:15px;max-width:70%}
 .me{background:#6366f1;margin-left:auto}
 .them{background:#334155}

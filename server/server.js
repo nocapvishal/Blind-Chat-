@@ -10,9 +10,8 @@ app.use(express.static("public"));
 
 let pairQueue = [];
 let groupQueue = [];
-let onlineUsers = 0;
 
-function findPairMatch(socket) {
+function matchPair(socket) {
   if (pairQueue.length === 0) return false;
 
   let partner = pairQueue.shift();
@@ -30,7 +29,6 @@ function tryGroupMatch() {
   if (groupQueue.length < 3) return;
 
   let group = groupQueue.splice(0, 3);
-
   group.forEach(user => {
     user.group = group;
     user.emit("group-matched");
@@ -39,18 +37,13 @@ function tryGroupMatch() {
 
 io.on("connection", socket => {
 
-  onlineUsers++;
-  io.emit("online-count", onlineUsers);
-
   socket.on("start-chat", profile => {
     socket.profile = profile;
 
-    // Try pair match first
-    if (!findPairMatch(socket)) {
+    if (!matchPair(socket)) {
       pairQueue.push(socket);
       socket.emit("waiting");
 
-      // Offer group chat after 10 sec
       setTimeout(() => {
         if (pairQueue.includes(socket)) {
           socket.emit("group-offer");
@@ -66,9 +59,7 @@ io.on("connection", socket => {
   });
 
   socket.on("message", msg => {
-    if (socket.partner) {
-      socket.partner.emit("message", msg);
-    }
+    if (socket.partner) socket.partner.emit("message", msg);
 
     if (socket.group) {
       socket.group.forEach(u => {
@@ -79,12 +70,7 @@ io.on("connection", socket => {
 
   socket.on("typing", () => {
     socket.partner?.emit("typing");
-
-    if (socket.group) {
-      socket.group.forEach(u => {
-        if (u !== socket) u.emit("typing");
-      });
-    }
+    socket.group?.forEach(u => { if(u!==socket) u.emit("typing"); });
   });
 
   socket.on("skip", () => {
@@ -95,16 +81,13 @@ io.on("connection", socket => {
   });
 
   socket.on("disconnect", () => {
-    onlineUsers--;
-    io.emit("online-count", onlineUsers);
-
     pairQueue = pairQueue.filter(u => u !== socket);
     groupQueue = groupQueue.filter(u => u !== socket);
-
     socket.partner?.emit("partner-left");
   });
+
 });
 
 server.listen(process.env.PORT || 3000, () =>
-  console.log("Server stable with group + pair matching 🚀")
+  console.log("Blind Chat in Campus running 🚀")
 );

@@ -1,6 +1,7 @@
 {
   "name": "blind-chat-campus",
   "version": "1.0.0",
+  "description": "Blind Chat in Campus",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js"
