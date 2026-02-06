@@ -1,57 +1,16 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Blind Chat in Campus</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
+<div id="chat-screen" class="screen">
+  <h3 id="onlineCount">Online: 0</h3>
+  <h4 id="partnerName"></h4>
 
-<div class="container">
+  <div id="chatBox"></div>
+  <p id="typingIndicator"></p>
 
-  <!-- LOGIN -->
-  <div id="login-screen" class="screen active">
-    <h1>Blind Chat in Campus</h1>
-    <input id="emailInput" placeholder="Enter university email">
-    <button id="loginBtn">Continue</button>
+  <input id="messageInput" placeholder="Type message">
+  <button id="sendBtn">Send</button>
+
+  <div class="actions">
+    <button id="skipBtn">Skip</button>
+    <button id="reportBtn">Report</button>
+    <button id="revealBtn">Reveal</button>
   </div>
-
-  <!-- PROFILE -->
-  <div id="profile-screen" class="screen">
-    <h2>Your Details (optional)</h2>
-    <input id="dept" placeholder="Department">
-    <input id="course" placeholder="Course">
-    <input id="ethnicity" placeholder="Ethnicity">
-    <input id="year" placeholder="Year">
-    <button id="saveProfileBtn">Save & Continue</button>
-    <button id="skipProfileBtn">Skip</button>
-  </div>
-
-  <!-- START -->
-  <div id="start-screen" class="screen">
-    <button id="startBtn">Start Chat</button>
-  </div>
-
-  <!-- CONNECTING -->
-  <div id="connecting-screen" class="screen">
-    <h2 id="status">Waiting for another student...</h2>
-  </div>
-
-  <!-- CHAT -->
-  <div id="chat-screen" class="screen">
-    <div id="chatBox"></div>
-
-    <input id="messageInput" placeholder="Type message">
-    <button id="sendBtn">Send</button>
-
-    <div class="actions">
-      <button id="skipBtn">Skip</button>
-      <button id="revealBtn">Reveal</button>
-    </div>
-  </div>
-
 </div>
-
-<script src="/socket.io/socket.io.js"></script>
-<script src="app.js"></script>
-</body>
-</html>

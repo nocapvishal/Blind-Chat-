@@ -4,48 +4,65 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
 
+const io = new Server(server, {
+  cors: { origin: "*", methods: ["GET","POST"] }
+});
 
 app.use(express.static("public"));
 
 let waitingUser = null;
+let onlineUsers = 0;
 
 io.on("connection", socket => {
 
-  socket.on("start-chat", ()=>{
+  onlineUsers++;
+  io.emit("online-count", onlineUsers);
+
+  socket.nickname = "Student " + Math.floor(Math.random()*900+100);
+
+  socket.on("start-chat", () => {
     if(waitingUser){
       socket.partner = waitingUser;
       waitingUser.partner = socket;
 
-      socket.emit("matched");
-      waitingUser.emit("matched");
+      socket.emit("matched", socket.partner.nickname);
+      waitingUser.emit("matched", socket.nickname);
 
       waitingUser = null;
-    }else{
+    } else {
       waitingUser = socket;
+      socket.emit("waiting");
     }
   });
 
-  socket.on("message", msg=>{
+  socket.on("typing", () => {
+    socket.partner?.emit("typing");
+  });
+
+  socket.on("message", msg => {
     socket.partner?.emit("message", msg);
   });
 
-  socket.on("skip", ()=>{
+  socket.on("skip", () => {
     socket.partner?.emit("partner-left");
     socket.partner = null;
     waitingUser = socket;
   });
 
-  socket.on("reveal", profile=>{
-    socket.partner?.emit("revealed", profile);
+  socket.on("report", () => {
+    console.log("User reported partner");
   });
 
+  socket.on("disconnect", () => {
+    onlineUsers--;
+    io.emit("online-count", onlineUsers);
+
+    if(waitingUser === socket) waitingUser = null;
+    socket.partner?.emit("partner-left");
+  });
 });
 
-server.listen(process.env.PORT || 3000, ()=>console.log("Blind Chat in Campus running"));
+server.listen(process.env.PORT || 3000, () =>
+  console.log("Blind Chat in Campus running 🚀")
+);
