@@ -1,76 +1,74 @@
-document.addEventListener("DOMContentLoaded", () => {
-  alert("JS LOADED"); // 🔥 YOU MUST SEE THIS
+const socket = io();
+let userProfile = null;
 
-  function showScreen(id) {
-    document.querySelectorAll(".screen").forEach(s => {
-      s.classList.remove("active");
-    });
-    document.getElementById(id).classList.add("active");
-  }
+function show(id){
+  document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+}
 
-  const emailInput = document.getElementById("emailInput");
-  const sendOtpBtn = document.getElementById("sendOtpBtn");
-  const otpInput = document.getElementById("otpInput");
-  const verifyOtpBtn = document.getElementById("verifyOtpBtn");
-  const startBtn = document.getElementById("startBtn");
-
-  if (!sendOtpBtn || !verifyOtpBtn || !startBtn) {
-    alert("BUTTON IDs NOT FOUND — CHECK HTML IDS");
-    console.error({
-      sendOtpBtn,
-      verifyOtpBtn,
-      startBtn
-    });
+/* LOGIN */
+document.getElementById("loginBtn").onclick = () => {
+  const email = emailInput.value.trim();
+  if(!email.endsWith("@pondiuni.ac.in")){
+    alert("Use university email");
     return;
   }
+  show("profile-screen");
+};
 
-  sendOtpBtn.addEventListener("click", async () => {
-    alert("CONTINUE CLICKED");
+/* PROFILE SAVE */
+saveProfileBtn.onclick = ()=>{
+  userProfile = {
+    dept: dept.value,
+    course: course.value,
+    ethnicity: ethnicity.value,
+    year: year.value
+  };
+  show("start-screen");
+};
 
-    const email = emailInput.value.trim();
-    if (!email.endsWith("@pondiuni.ac.in")) {
-      alert("Invalid email");
-      return;
-    }
+skipProfileBtn.onclick = ()=>{
+  show("start-screen");
+};
 
-    const res = await fetch("/send-otp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email })
-    });
+/* START CHAT */
+startBtn.onclick = ()=>{
+  show("connecting-screen");
+  socket.emit("start-chat");
+};
 
-    const data = await res.json();
-    if (!res.ok) {
-      alert(data.error || "OTP failed");
-      return;
-    }
+socket.on("matched", ()=>{
+  show("chat-screen");
+});
 
-    showScreen("otp-screen");
-  });
+/* CHAT */
+sendBtn.onclick = ()=>{
+  socket.emit("message", messageInput.value);
+  chatBox.innerHTML += `<div>You: ${messageInput.value}</div>`;
+  messageInput.value="";
+};
 
-  verifyOtpBtn.addEventListener("click", async () => {
-    alert("VERIFY CLICKED");
+socket.on("message", msg=>{
+  chatBox.innerHTML += `<div>Stranger: ${msg}</div>`;
+});
 
-    const otp = otpInput.value.trim();
-    const email = emailInput.value.trim();
+/* SKIP PARTNER */
+skipBtn.onclick = ()=>{
+  socket.emit("skip");
+  show("connecting-screen");
+};
 
-    const res = await fetch("/verify-otp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, otp })
-    });
+/* REVEAL */
+revealBtn.onclick = ()=>{
+  if(!userProfile){
+    alert("Fill details first!");
+    show("profile-screen");
+    return;
+  }
+  socket.emit("reveal", userProfile);
+};
 
-    const data = await res.json();
-    if (!res.ok) {
-      alert(data.error || "OTP verify failed");
-      return;
-    }
-
-    showScreen("start-screen");
-  });
-
-  startBtn.addEventListener("click", () => {
-    alert("START CHAT CLICKED");
-    showScreen("connecting-screen");
-  });
-}); 
+socket.on("revealed", profile=>{
+  chatBox.innerHTML += `<hr>Partner revealed:
+  ${profile.dept} | ${profile.course} | ${profile.year}`;
+});
