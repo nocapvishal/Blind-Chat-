@@ -1,4 +1,8 @@
-const socket = io();
+const socket = io({
+  transports: ["websocket"],
+  secure: true
+});
+
 let userProfile = null;
 
 function show(id){
