@@ -1,19 +1,17 @@
-const socket = io({ transports:["websocket"] });
-
+const socket=io({transports:["websocket"]});
 const screens=document.querySelectorAll(".screen");
-function show(id){
- screens.forEach(s=>s.classList.remove("active"));
- document.getElementById(id).classList.add("active");
-}
+function show(id){screens.forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active");}
 
-/* START CHAT */
+verifyBtn.onclick=()=>socket.emit("verify-email",emailInput.value);
+socket.on("email-valid",()=>show("profile-screen"));
+socket.on("email-invalid",()=>emailError.innerText="Use university email");
+
 startBtn.onclick=()=>{
  const profile={
   nickname:nickname.value||"Student",
   gender:gender.value,
   prefGender:prefGender.value,
-  dept:dept.value,
-  year:year.value
+  intent:intent.value
  };
  show("search-screen");
  socket.emit("start-chat",profile);
@@ -24,55 +22,21 @@ socket.on("matched",name=>{
  show("chat-screen");
 });
 
-/* SEND MESSAGE */
 function sendMessage(){
- if(!msgInput.value.trim()) return;
+ if(!msgInput.value) return;
  socket.emit("message",msgInput.value);
  chatBox.innerHTML+=`<div class="msg me">${msgInput.value}</div>`;
  msgInput.value="";
  chatBox.scrollTop=chatBox.scrollHeight;
 }
 sendBtn.onclick=sendMessage;
+msgInput.addEventListener("keypress",e=>{if(e.key==="Enter") sendMessage();});
 
-/* ENTER KEY SEND */
-msgInput.addEventListener("keypress",e=>{
- if(e.key==="Enter") sendMessage();
-});
-
-/* RECEIVE MESSAGE */
 socket.on("message",msg=>{
  chatBox.innerHTML+=`<div class="msg them">${msg}</div>`;
- chatBox.scrollTop=chatBox.scrollHeight;
 });
 
-/* TYPING */
-let typingTimeout;
-msgInput.addEventListener("input",()=>{
- socket.emit("typing");
-});
-socket.on("typing",()=>{
- partnerName.innerHTML=`
-  <div class="typing">
-   <div class="dot"></div>
-   <div class="dot"></div>
-   <div class="dot"></div>
-  </div>`;
- setTimeout(()=>partnerName.innerText="Chatting...",1000);
-});
+msgInput.oninput=()=>socket.emit("typing");
+socket.on("typing",()=>partnerName.innerText="Typing...");
 
-/* SKIP */
-skipBtn.onclick=()=>{
- socket.emit("skip");
- chatBox.innerHTML="";
- show("search-screen");
-};
-
-/* GROUP OFFER */
-socket.on("group-offer",()=>{
- if(confirm("No partner found. Join group chat?")){
-   socket.emit("join-group");
- }
-});
-socket.on("group-matched",()=>{
- partnerName.innerText="🎉 Group Chat Started";
-});
+skipBtn.onclick=()=>{socket.emit("skip");show("search-screen");chatBox.innerHTML="";}
