@@ -11,89 +11,89 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"],
-  },
+    methods: ["GET", "POST"]
+  }
 });
 
 let waitingUsers = [];
 let rooms = {};
 
+function createRoom(user1, user2) {
+  const roomId = "room_" + user1 + "_" + user2;
+  rooms[roomId] = { users: [user1, user2] };
+
+  io.sockets.sockets.get(user1)?.join(roomId);
+  io.sockets.sockets.get(user2)?.join(roomId);
+
+  io.to(roomId).emit("matched");
+}
+
+function tryMatch() {
+  if (waitingUsers.length >= 2) {
+    const user1 = waitingUsers.shift();
+    const user2 = waitingUsers.shift();
+    createRoom(user1, user2);
+  }
+}
+
+function leaveRoomAndRequeue(socket, isDisconnect=false) {
+  const roomId = socket.roomId;
+  if (!roomId) return;
+
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const partnerId = room.users.find(id => id !== socket.id);
+  const partnerSocket = io.sockets.sockets.get(partnerId);
+
+  delete rooms[roomId];
+  socket.leave(roomId);
+  socket.roomId = null;
+
+  if (partnerSocket) {
+    partnerSocket.leave(roomId);
+    partnerSocket.roomId = null;
+    partnerSocket.emit("partner-left");
+
+    if (!isDisconnect) waitingUsers.push(partnerId);
+  }
+}
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  io.emit("online-count", io.engine.clientsCount);
-
-  // START SEARCH
   socket.on("start-search", () => {
-    waitingUsers = waitingUsers.filter(id => id !== socket.id);
-
-    if (waitingUsers.length > 0) {
-      const partnerId = waitingUsers.shift();
-
-      const roomId = socket.id + "#" + partnerId;
-
-      socket.join(roomId);
-      io.sockets.sockets.get(partnerId)?.join(roomId);
-
-      socket.roomId = roomId;
-      io.sockets.sockets.get(partnerId).roomId = roomId;
-
-      rooms[roomId] = { users: [socket.id, partnerId] };
-
-      io.to(roomId).emit("matched");
-      console.log("Matched:", roomId);
-    } else {
+    if (!waitingUsers.includes(socket.id)) {
       waitingUsers.push(socket.id);
+      tryMatch(); // instant match
     }
   });
 
-  // MESSAGE
   socket.on("send-message", (msg) => {
-    if (socket.roomId) {
-      socket.to(socket.roomId).emit("receive-message", msg);
-    }
+    const roomId = socket.roomId;
+    if (roomId) socket.to(roomId).emit("receive-message", msg);
   });
 
-  // SKIP
+  // 🔥 TYPING EVENTS
+  socket.on("typing", () => {
+    if (socket.roomId) socket.to(socket.roomId).emit("partner-typing");
+  });
+
+  socket.on("stop-typing", () => {
+    if (socket.roomId) socket.to(socket.roomId).emit("partner-stop-typing");
+  });
+
   socket.on("skip", () => {
     leaveRoomAndRequeue(socket);
+    waitingUsers.push(socket.id);
+    tryMatch();
   });
 
-  // STOP SEARCH
-  socket.on("stop-search", () => {
-    waitingUsers = waitingUsers.filter(id => id !== socket.id);
-  });
-
-  // DISCONNECT
   socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
     leaveRoomAndRequeue(socket, true);
     waitingUsers = waitingUsers.filter(id => id !== socket.id);
-    io.emit("online-count", io.engine.clientsCount);
   });
-
-  function leaveRoomAndRequeue(socket, isDisconnect=false) {
-    const roomId = socket.roomId;
-    if (!roomId) return;
-
-    const room = rooms[roomId];
-    if (!room) return;
-
-    room.users.forEach((id) => {
-      const s = io.sockets.sockets.get(id);
-      if (!s) return;
-
-      s.leave(roomId);
-      s.roomId = null;
-
-      if (!isDisconnect) {
-        waitingUsers.push(id);
-        s.emit("partner-left");
-      }
-    });
-
-    delete rooms[roomId];
-  }
 });
 
-const PORT = 5000;
-server.listen(PORT, () => console.log("Server running on port", PORT));
+server.listen(3001, () => console.log("Server running on port 3001"));
