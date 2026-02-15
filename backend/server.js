@@ -9,62 +9,76 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-let queue = [];
-let rooms = {};
+let waitingUsers = [];
+let rooms = {}; // socketId -> roomId
 
-/* ---------------- MATCH RULES ---------------- */
+// ---------------- MATCH RULES ----------------
 
-function isCompatible(a, b) {
-  // preference check BOTH SIDES
-  const prefOk =
-    (a.preference === "any" || a.preference === b.gender) &&
-    (b.preference === "any" || b.preference === a.gender);
+function canMatch(a, b) {
+  // Stage 1 — strict
+  if (a.stage === 1 || b.stage === 1) {
+    return (
+      a.intent === b.intent &&
+      (a.preference === "any" || a.preference === b.gender) &&
+      (b.preference === "any" || b.preference === a.gender)
+    );
+  }
 
-  if (!prefOk) return false;
+  // Stage 2 — relax intent
+  if (a.stage === 2 || b.stage === 2) {
+    return (
+      (a.preference === "any" || a.preference === b.gender) &&
+      (b.preference === "any" || b.preference === a.gender)
+    );
+  }
 
-  // Stage 1 → same intent
-  if (a.stage === 1 && b.stage === 1) return a.intent === b.intent;
-
-  // Stage 2 → ignore intent
-  if (a.stage >= 2 || b.stage >= 2) return prefOk;
-
-  return false;
+  // Stage 3 — open campus
+  return true;
 }
 
-/* ---------------- MATCH ENGINE ---------------- */
+// ---------------- MATCH ENGINE ----------------
 
 function tryMatch() {
-  for (let i = 0; i < queue.length; i++) {
-    for (let j = i + 1; j < queue.length; j++) {
+  for (let i = 0; i < waitingUsers.length; i++) {
+    for (let j = i + 1; j < waitingUsers.length; j++) {
 
-      const A = queue[i];
-      const B = queue[j];
+      const a = waitingUsers[i];
+      const b = waitingUsers[j];
 
-      if (!isCompatible(A, B)) continue;
+      if (!canMatch(a, b)) continue;
 
-      const roomId = `room-${A.id}-${B.id}`;
+      const room = "room-" + a.id + "-" + b.id;
 
-      rooms[A.id] = roomId;
-      rooms[B.id] = roomId;
+      rooms[a.id] = room;
+      rooms[b.id] = room;
 
-      io.to(A.id).emit("matched");
-      io.to(B.id).emit("matched");
+      io.sockets.sockets.get(a.id)?.join(room);
+      io.sockets.sockets.get(b.id)?.join(room);
 
-      queue = queue.filter(u => u.id !== A.id && u.id !== B.id);
+      io.to(room).emit("matched");
 
-      console.log("MATCHED:", A.id, B.id);
+      waitingUsers = waitingUsers.filter(
+        u => u.id !== a.id && u.id !== b.id
+      );
+
+      console.log("Matched:", a.id, b.id);
       return;
     }
   }
 }
 
-/* ---------------- SOCKET EVENTS ---------------- */
+// 🔁 CONTINUOUS MATCH LOOP (VERY IMPORTANT)
+setInterval(() => {
+  if (waitingUsers.length > 1) tryMatch();
+}, 1000);
+
+// ---------------- SOCKET EVENTS ----------------
 
 io.on("connection", (socket) => {
-  console.log("Connected:", socket.id);
+  console.log("User connected:", socket.id);
 
   socket.on("start-search", (data) => {
-    queue.push({
+    waitingUsers.push({
       id: socket.id,
       gender: data.gender,
       preference: data.preference,
@@ -73,81 +87,61 @@ io.on("connection", (socket) => {
       stage: 1
     });
 
-    tryMatch();
+    console.log("Searching:", socket.id);
   });
 
-  /* ----- SKIP PARTNER ----- */
+  // Suggest relaxing filters
+  setInterval(() => {
+    const user = waitingUsers.find(u => u.id === socket.id);
+    if (!user) return;
+
+    const waitTime = (Date.now() - user.joinedAt) / 1000;
+
+    if (waitTime > 10 && user.stage === 1) {
+      socket.emit("suggest-relax-intent");
+      user.stage = 2;
+    }
+
+    if (waitTime > 25 && user.stage === 2) {
+      socket.emit("suggest-open-match");
+      user.stage = 3;
+    }
+  }, 3000);
+
+  // 💬 Messaging (ROOM BASED — FIXED)
+  socket.on("send-message", (msg) => {
+    const room = rooms[socket.id];
+    if (!room) return;
+    socket.to(room).emit("receive-message", msg);
+  });
+
+  // 🔁 SKIP = NEXT PERSON
   socket.on("skip", () => {
     const room = rooms[socket.id];
 
     if (room) {
-      const partnerId = Object.keys(rooms)
-        .find(id => rooms[id] === room && id !== socket.id);
-
-      if (partnerId) {
-        io.to(partnerId).emit("partner-left");
-        delete rooms[partnerId];
-      }
-
-      delete rooms[socket.id];
+      socket.to(room).emit("partner-left");
     }
 
-    // requeue the skipper instantly
+    delete rooms[socket.id];
+
     socket.emit("requeue");
+    console.log("User skipped:", socket.id);
   });
 
-  /* ----- MESSAGES ----- */
-  socket.on("send-message", (msg) => {
-    const room = rooms[socket.id];
-    if (!room) return;
-
-    // send ONLY to partner (not everyone!)
-    socket.to(room).emit("receive-message", msg);
-  });
-
-  /* ----- DISCONNECT ----- */
   socket.on("disconnect", () => {
-    queue = queue.filter(u => u.id !== socket.id);
+    waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
 
     const room = rooms[socket.id];
     if (room) {
-      const partnerId = Object.keys(rooms)
-        .find(id => rooms[id] === room && id !== socket.id);
-
-      if (partnerId) {
-        io.to(partnerId).emit("partner-left");
-        delete rooms[partnerId];
-      }
-
-      delete rooms[socket.id];
+      socket.to(room).emit("partner-left");
     }
+
+    delete rooms[socket.id];
 
     console.log("Disconnected:", socket.id);
   });
 });
-
-/* ---------------- SMART FALLBACK SYSTEM ---------------- */
-/* After waiting → suggest relaxing preferences */
-
-setInterval(() => {
-  const now = Date.now();
-
-  queue.forEach(user => {
-    const wait = (now - user.joinedAt) / 1000;
-
-    if (wait > 10 && user.stage === 1) {
-      io.to(user.id).emit("suggest-relax-intent");
-      user.stage = 2;
-    }
-
-    if (wait > 25 && user.stage === 2) {
-      io.to(user.id).emit("suggest-open-match");
-      user.stage = 3;
-    }
-  });
-
-  tryMatch();
-}, 3000);
 
 server.listen(3001, () =>
   console.log("Server running on port 3001")
