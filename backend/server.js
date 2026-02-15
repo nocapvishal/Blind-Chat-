@@ -15,8 +15,12 @@ let rooms = {}; // socketId -> roomId
 // ---------------- MATCH RULES ----------------
 
 function canMatch(a, b) {
-  // Stage 1 — strict
-  if (a.stage === 1 || b.stage === 1) {
+
+  // ⭐ Use shared stage instead of strictest stage
+  const stage = Math.min(a.stage, b.stage);
+
+  // STAGE 1 — strict intent + gender
+  if (stage === 1) {
     return (
       a.intent === b.intent &&
       (a.preference === "any" || a.preference === b.gender) &&
@@ -24,17 +28,18 @@ function canMatch(a, b) {
     );
   }
 
-  // Stage 2 — relax intent
-  if (a.stage === 2 || b.stage === 2) {
+  // STAGE 2 — ignore intent, keep gender preference
+  if (stage === 2) {
     return (
       (a.preference === "any" || a.preference === b.gender) &&
       (b.preference === "any" || b.preference === a.gender)
     );
   }
 
-  // Stage 3 — open campus
+  // STAGE 3 — open campus (match anyone)
   return true;
 }
+
 
 // ---------------- MATCH ENGINE ----------------
 
