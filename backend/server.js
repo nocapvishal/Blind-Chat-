@@ -1,68 +1,169 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const cors = require("cors");
 
 const app = express();
-app.use(cors());
-
 const server = http.createServer(app);
+
 const io = new Server(server, {
-  cors: { origin: "*" },
+  cors: { origin: "*" }
 });
 
 let waitingUsers = [];
-let onlineUsers = 0;
+let rooms = {}; // socketId → roomId
 
+// ---------- MATCH RULES ----------
+function canMatch(a, b) {
+
+  // Stage 1 strict
+  if (a.stage === 1 || b.stage === 1) {
+    return (
+      (a.preference === "any" || a.preference === b.gender) &&
+      (b.preference === "any" || b.preference === a.gender)
+    );
+  }
+
+  // Stage 2 relax gender preference
+  if (a.stage === 2 || b.stage === 2) {
+    return true;
+  }
+
+  // Stage 3 open campus
+  return true;
+}
+
+// ---------- MATCH ENGINE ----------
+function tryMatch() {
+
+  if (waitingUsers.length < 2) return;
+
+  for (let i = 0; i < waitingUsers.length; i++) {
+    for (let j = i + 1; j < waitingUsers.length; j++) {
+
+      const a = waitingUsers[i];
+      const b = waitingUsers[j];
+
+      if (canMatch(a, b)) {
+
+        const room = "room-" + a.id + "-" + b.id;
+
+        rooms[a.id] = room;
+        rooms[b.id] = room;
+
+        io.sockets.sockets.get(a.id)?.join(room);
+        io.sockets.sockets.get(b.id)?.join(room);
+
+        io.to(room).emit("matched");
+
+        waitingUsers = waitingUsers.filter(
+          u => u.id !== a.id && u.id !== b.id
+        );
+
+        console.log("Matched:", a.id, b.id);
+        return;
+      }
+    }
+  }
+}
+
+// ---------- SOCKET CONNECTION ----------
 io.on("connection", (socket) => {
-  onlineUsers++;
-  io.emit("online-count", onlineUsers);
   console.log("User connected:", socket.id);
 
-  socket.on("start-search", (preferences) => {
-    socket.preferences = preferences;
-    waitingUsers.push(socket);
-    matchUsers();
+  // START SEARCH
+  socket.on("start-search", (data) => {
+
+    waitingUsers.push({
+      id: socket.id,
+      gender: data.gender,
+      preference: data.preference,
+      joinedAt: Date.now(),
+      stage: 1
+    });
+
+    console.log("Searching:", socket.id);
+    tryMatch();
   });
 
+  // RELAX FILTERS
+  socket.on("relax-intent", () => {
+    const user = waitingUsers.find(u => u.id === socket.id);
+    if (user) {
+      user.stage = 2;
+      tryMatch(); // retry match immediately
+    }
+  });
+
+  // OPEN MATCH
+  socket.on("open-match", () => {
+    const user = waitingUsers.find(u => u.id === socket.id);
+    if (user) {
+      user.stage = 3;
+      tryMatch(); // retry match immediately
+    }
+  });
+
+  // SKIP USER
+  socket.on("skip", () => {
+
+    const room = rooms[socket.id];
+    if (room) {
+      socket.to(room).emit("partner-left");
+      socket.leave(room);
+    }
+
+    delete rooms[socket.id];
+
+    waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
+
+    socket.emit("skipped");
+    console.log("User skipped:", socket.id);
+  });
+
+  // SEND MESSAGE (FIXED ROOM BUG)
   socket.on("send-message", (msg) => {
-    if (socket.partner) {
-      io.to(socket.partner).emit("receive-message", msg);
-      io.to(socket.partner).emit("play-sound");
-    }
+    const room = rooms[socket.id];
+    if (!room) return;
+
+    socket.to(room).emit("receive-message", msg);
   });
 
-  socket.on("typing", () => {
-    if (socket.partner) io.to(socket.partner).emit("typing");
-  });
-
+  // DISCONNECT HANDLING (FIXED GHOST BUG)
   socket.on("disconnect", () => {
-    onlineUsers--;
-    io.emit("online-count", onlineUsers);
 
-    waitingUsers = waitingUsers.filter((u) => u.id !== socket.id);
-
-    if (socket.partner) {
-      io.to(socket.partner).emit("partner-left");
+    const room = rooms[socket.id];
+    if (room) {
+      socket.to(room).emit("partner-left");
     }
 
-    console.log("User disconnected:", socket.id);
+    delete rooms[socket.id];
+    waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
+
+    console.log("Disconnected:", socket.id);
   });
 });
 
-function matchUsers() {
-  if (waitingUsers.length < 2) return;
+// ---------- AUTO RELAX TIMER ----------
+setInterval(() => {
 
-  const user1 = waitingUsers.shift();
-  const user2 = waitingUsers.shift();
+  const now = Date.now();
 
-  user1.partner = user2.id;
-  user2.partner = user1.id;
+  waitingUsers.forEach(user => {
+    const wait = (now - user.joinedAt) / 1000;
 
-  io.to(user1.id).emit("matched");
-  io.to(user2.id).emit("matched");
+    if (wait > 10 && user.stage === 1) {
+      io.to(user.id).emit("suggest-relax-intent");
+      user.stage = 2;
+    }
 
-  console.log("Matched:", user1.id, user2.id);
-}
+    if (wait > 25 && user.stage === 2) {
+      io.to(user.id).emit("suggest-open-match");
+      user.stage = 3;
+    }
+  });
 
-server.listen(3001, () => console.log("Server running on port 3001"));
+}, 3000);
+
+server.listen(3001, () =>
+  console.log("Server running on port 3001")
+);
