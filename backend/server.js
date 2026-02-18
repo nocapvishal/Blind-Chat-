@@ -5,68 +5,78 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: { origin: "*" }
+const io = new Server(server,{
+  cors:{origin:"*"}
 });
 
-let waitingUsers = [];
-let rooms = {};
+let waitingUsers=[];
+let activeRooms={}; // roomId -> [userA,userB]
+let userRoom={};    // socketId -> roomId
 
-function getCounts() {
-  const counts = { friendship:0, dating:0, casual:0 };
-  waitingUsers.forEach(u => {
-    if(counts[u.intent] !== undefined) counts[u.intent]++;
-  });
-  return counts;
-}
 
-function broadcastCounts() {
-  io.emit("online-counts", getCounts());
-}
+// ================= MATCH LOGIC =================
 
 function canMatch(a,b){
   if(a.stage===1 || b.stage===1){
-    return (
-      a.intent===b.intent &&
-      (a.preference==="any"||a.preference===b.gender) &&
-      (b.preference==="any"||b.preference===a.gender)
-    );
+    return a.intent===b.intent &&
+      (a.preference==="any" || a.preference===b.gender) &&
+      (b.preference==="any" || b.preference===a.gender);
   }
+
   if(a.stage===2 || b.stage===2){
-    return (
-      (a.preference==="any"||a.preference===b.gender) &&
-      (b.preference==="any"||b.preference===a.gender)
-    );
+    return (a.preference==="any" || a.preference===b.gender) &&
+           (b.preference==="any" || b.preference===a.gender);
   }
+
   return true;
 }
 
 function tryMatch(){
   for(let i=0;i<waitingUsers.length;i++){
     for(let j=i+1;j<waitingUsers.length;j++){
+
       const a=waitingUsers[i];
       const b=waitingUsers[j];
 
       if(canMatch(a,b)){
+
         const room="room-"+a.id+"-"+b.id;
-        rooms[a.id]=room;
-        rooms[b.id]=room;
 
-        io.to(a.id).emit("matched");
-        io.to(b.id).emit("matched");
+        userRoom[a.id]=room;
+        userRoom[b.id]=room;
+        activeRooms[room]=[a.id,b.id];
 
-        waitingUsers = waitingUsers.filter(
-          u => u.id!==a.id && u.id!==b.id
+        io.sockets.sockets.get(a.id)?.join(room);
+        io.sockets.sockets.get(b.id)?.join(room);
+
+        io.to(room).emit("matched");
+
+        waitingUsers=waitingUsers.filter(
+          u=>u.id!==a.id && u.id!==b.id
         );
 
-        broadcastCounts();
+        console.log("MATCHED:",room);
+        updateCounts();
         return;
       }
     }
   }
 }
 
+
+// ============== ONLINE COUNTERS ==============
+
+function updateCounts(){
+  let counts={friendship:0,dating:0,casual:0};
+  waitingUsers.forEach(u=>counts[u.intent]++);
+  io.emit("online-counts",counts);
+}
+
+
+// ============== SOCKET EVENTS ==============
+
 io.on("connection",(socket)=>{
+  console.log("User connected:",socket.id);
 
   socket.on("start-search",(data)=>{
     waitingUsers.push({
@@ -77,13 +87,14 @@ io.on("connection",(socket)=>{
       joinedAt:Date.now(),
       stage:1
     });
-    broadcastCounts();
+
+    updateCounts();
     tryMatch();
   });
 
   socket.on("cancel-search",()=>{
-    waitingUsers = waitingUsers.filter(u=>u.id!==socket.id);
-    broadcastCounts();
+    waitingUsers=waitingUsers.filter(u=>u.id!==socket.id);
+    updateCounts();
   });
 
   socket.on("relax-intent",()=>{
@@ -96,40 +107,76 @@ io.on("connection",(socket)=>{
     if(u) u.stage=3;
   });
 
+
+  // ============ MESSAGE SYSTEM ============
+
   socket.on("send-message",(msg)=>{
-    const room=rooms[socket.id];
+    const room=userRoom[socket.id];
     if(!room) return;
-    socket.broadcast.emit("receive-message",msg);
+
+    socket.to(room).emit("receive-message",msg);
   });
+
+
+  // ============ SKIP CHAT ============
 
   socket.on("skip-chat",()=>{
-    const room=rooms[socket.id];
-    if(room){
-      socket.broadcast.emit("partner-left");
-      delete rooms[socket.id];
-    }
+    const room=userRoom[socket.id];
+    if(!room) return;
+
+    const users=activeRooms[room];
+    if(!users) return;
+
+    const partner=users.find(id=>id!==socket.id);
+
+    io.to(partner).emit("partner-skipped");
+
+    delete activeRooms[room];
+    delete userRoom[socket.id];
+    delete userRoom[partner];
   });
 
+
+  // ============ DISCONNECT ============
+
   socket.on("disconnect",()=>{
-    waitingUsers = waitingUsers.filter(u=>u.id!==socket.id);
-    delete rooms[socket.id];
-    broadcastCounts();
+    waitingUsers=waitingUsers.filter(u=>u.id!==socket.id);
+
+    const room=userRoom[socket.id];
+    if(room){
+      const users=activeRooms[room];
+      const partner=users?.find(id=>id!==socket.id);
+      if(partner) io.to(partner).emit("partner-disconnected");
+
+      delete activeRooms[room];
+      delete userRoom[socket.id];
+    }
+
+    updateCounts();
+    console.log("Disconnected:",socket.id);
   });
 });
 
+
+// ========== RELAX / OPEN TIMERS ==========
 setInterval(()=>{
   const now=Date.now();
-  waitingUsers.forEach(user=>{
-    const wait=(now-user.joinedAt)/1000;
-    if(wait>10 && user.stage===1){
-      io.to(user.id).emit("suggest-relax-intent");
-      user.stage=2;
+
+  waitingUsers.forEach(u=>{
+    const wait=(now-u.joinedAt)/1000;
+
+    if(wait>10 && u.stage===1){
+      io.to(u.id).emit("suggest-relax-intent");
+      u.stage=2;
     }
-    if(wait>25 && user.stage===2){
-      io.to(user.id).emit("suggest-open-match");
-      user.stage=3;
+
+    if(wait>25 && u.stage===2){
+      io.to(u.id).emit("suggest-open-match");
+      u.stage=3;
     }
   });
+
 },3000);
+
 
 server.listen(3001,()=>console.log("Server running"));
