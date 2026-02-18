@@ -10,165 +10,126 @@ const io = new Server(server, {
 });
 
 let waitingUsers = [];
-let activeChats = {}; // socketId -> partnerId
-let userTimers = {};  // popup timers
+let rooms = {};
 
-// =========================
-// MATCHING LOGIC
-// =========================
-
-function preferenceMatch(a, b) {
-  return (
-    (a.preference === "any" || a.preference === b.gender) &&
-    (b.preference === "any" || b.preference === a.gender)
-  );
+function getCounts() {
+  const counts = { friendship:0, dating:0, casual:0 };
+  waitingUsers.forEach(u => {
+    if(counts[u.intent] !== undefined) counts[u.intent]++;
+  });
+  return counts;
 }
 
-function strictMatch(a, b) {
-  return a.intent === b.intent && preferenceMatch(a, b);
+function broadcastCounts() {
+  io.emit("online-counts", getCounts());
 }
 
-function tryMatch() {
-  for (let i = 0; i < waitingUsers.length; i++) {
-    for (let j = i + 1; j < waitingUsers.length; j++) {
-      const A = waitingUsers[i];
-      const B = waitingUsers[j];
+function canMatch(a,b){
+  if(a.stage===1 || b.stage===1){
+    return (
+      a.intent===b.intent &&
+      (a.preference==="any"||a.preference===b.gender) &&
+      (b.preference==="any"||b.preference===a.gender)
+    );
+  }
+  if(a.stage===2 || b.stage===2){
+    return (
+      (a.preference==="any"||a.preference===b.gender) &&
+      (b.preference==="any"||b.preference===a.gender)
+    );
+  }
+  return true;
+}
 
-      let canMatch = false;
+function tryMatch(){
+  for(let i=0;i<waitingUsers.length;i++){
+    for(let j=i+1;j<waitingUsers.length;j++){
+      const a=waitingUsers[i];
+      const b=waitingUsers[j];
 
-      if (A.stage === 1 && B.stage === 1) {
-        canMatch = strictMatch(A, B);
-      } else if (A.stage >= 2 && B.stage >= 2) {
-        canMatch = preferenceMatch(A, B);
-      } else if (A.stage === 3 || B.stage === 3) {
-        canMatch = true;
-      }
+      if(canMatch(a,b)){
+        const room="room-"+a.id+"-"+b.id;
+        rooms[a.id]=room;
+        rooms[b.id]=room;
 
-      if (canMatch) {
-        startChat(A.id, B.id);
+        io.to(a.id).emit("matched");
+        io.to(b.id).emit("matched");
+
+        waitingUsers = waitingUsers.filter(
+          u => u.id!==a.id && u.id!==b.id
+        );
+
+        broadcastCounts();
         return;
       }
     }
   }
 }
 
-function startChat(id1, id2) {
-  console.log("Matched:", id1, id2);
+io.on("connection",(socket)=>{
 
-  activeChats[id1] = id2;
-  activeChats[id2] = id1;
-
-  waitingUsers = waitingUsers.filter(u => u.id !== id1 && u.id !== id2);
-
-  clearTimers(id1);
-  clearTimers(id2);
-
-  io.to(id1).emit("matched");
-  io.to(id2).emit("matched");
-}
-
-// =========================
-// TIMER SYSTEM
-// =========================
-
-function startTimers(socketId) {
-  userTimers[socketId] = {
-    relax: setTimeout(() => {
-      io.to(socketId).emit("suggest-relax-intent");
-      updateStage(socketId, 2);
-    }, 10000),
-
-    open: setTimeout(() => {
-      io.to(socketId).emit("suggest-open-match");
-      updateStage(socketId, 3);
-    }, 25000)
-  };
-}
-
-function clearTimers(socketId) {
-  if (!userTimers[socketId]) return;
-  clearTimeout(userTimers[socketId].relax);
-  clearTimeout(userTimers[socketId].open);
-  delete userTimers[socketId];
-}
-
-function updateStage(id, stage) {
-  const user = waitingUsers.find(u => u.id === id);
-  if (user) user.stage = stage;
-}
-
-// =========================
-// SOCKET EVENTS
-// =========================
-
-io.on("connection", socket => {
-  console.log("Connected:", socket.id);
-
-  // START SEARCH
-  socket.on("start-search", data => {
+  socket.on("start-search",(data)=>{
     waitingUsers.push({
-      id: socket.id,
-      gender: data.gender,
-      preference: data.preference,
-      intent: data.intent,
-      stage: 1
+      id:socket.id,
+      gender:data.gender,
+      preference:data.preference,
+      intent:data.intent,
+      joinedAt:Date.now(),
+      stage:1
     });
-
-    startTimers(socket.id);
+    broadcastCounts();
     tryMatch();
   });
 
-  socket.on("relax-intent", () => updateStage(socket.id, 2));
-  socket.on("open-match", () => updateStage(socket.id, 3));
-
-  // MESSAGE
-  socket.on("send-message", msg => {
-    const partner = activeChats[socket.id];
-    if (partner) io.to(partner).emit("receive-message", msg);
+  socket.on("cancel-search",()=>{
+    waitingUsers = waitingUsers.filter(u=>u.id!==socket.id);
+    broadcastCounts();
   });
 
-  // SKIP CHAT
-  socket.on("skip", () => {
-    const partner = activeChats[socket.id];
-    if (!partner) return;
-
-    delete activeChats[socket.id];
-    delete activeChats[partner];
-
-    io.to(partner).emit("partner-disconnected");
-
-    // put partner back to search queue automatically
-    waitingUsers.push({
-      id: partner,
-      stage: 3,
-      preference: "any",
-      gender: "any",
-      intent: "chat"
-    });
-
-    tryMatch();
+  socket.on("relax-intent",()=>{
+    const u=waitingUsers.find(x=>x.id===socket.id);
+    if(u) u.stage=2;
   });
 
-  // CANCEL SEARCH (from match page)
-  socket.on("cancel-search", () => {
-    waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
-    clearTimers(socket.id);
+  socket.on("open-match",()=>{
+    const u=waitingUsers.find(x=>x.id===socket.id);
+    if(u) u.stage=3;
   });
 
-  // DISCONNECT
-  socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
+  socket.on("send-message",(msg)=>{
+    const room=rooms[socket.id];
+    if(!room) return;
+    socket.broadcast.emit("receive-message",msg);
+  });
 
-    waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
-    clearTimers(socket.id);
-
-    const partner = activeChats[socket.id];
-    if (partner) {
-      io.to(partner).emit("partner-disconnected");
-      delete activeChats[partner];
-      delete activeChats[socket.id];
+  socket.on("skip-chat",()=>{
+    const room=rooms[socket.id];
+    if(room){
+      socket.broadcast.emit("partner-left");
+      delete rooms[socket.id];
     }
+  });
+
+  socket.on("disconnect",()=>{
+    waitingUsers = waitingUsers.filter(u=>u.id!==socket.id);
+    delete rooms[socket.id];
+    broadcastCounts();
   });
 });
 
-server.listen(3001, () => console.log("Server running"));
+setInterval(()=>{
+  const now=Date.now();
+  waitingUsers.forEach(user=>{
+    const wait=(now-user.joinedAt)/1000;
+    if(wait>10 && user.stage===1){
+      io.to(user.id).emit("suggest-relax-intent");
+      user.stage=2;
+    }
+    if(wait>25 && user.stage===2){
+      io.to(user.id).emit("suggest-open-match");
+      user.stage=3;
+    }
+  });
+},3000);
+
+server.listen(3001,()=>console.log("Server running"));
