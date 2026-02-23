@@ -4,8 +4,10 @@ const http = require("http");
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const helmet = require("helmet");
+const { v4: uuidv4 } = require("uuid");
 
 const Room = require("./models/Room");
+const Report = require("./models/Report");
 const MatchingService = require("./services/matching.service");
 const {
   normalizeGender,
@@ -43,7 +45,6 @@ function updateOnlineCounts() {
   onlineCounts.friendship = matching.users.filter(u => u.intent === "friendship").length;
   onlineCounts.dating = matching.users.filter(u => u.intent === "dating").length;
   onlineCounts.casual = matching.users.filter(u => u.intent === "casual").length;
-
   io.emit("online-counts", onlineCounts);
 }
 
@@ -53,7 +54,6 @@ io.on("connection", (socket) => {
 
   // ================= START SEARCH =================
   socket.on("start-search", (data) => {
-
     const gender = normalizeGender(data.gender);
     const preference = normalizePreference(data.preference);
     const intent = normalizeIntent(data.intent);
@@ -87,7 +87,6 @@ io.on("connection", (socket) => {
 
           const userA = users[i];
           const userB = users[j];
-
           const roomId = "room-" + Date.now();
 
           matching.remove(userA.id);
@@ -114,7 +113,6 @@ io.on("connection", (socket) => {
           });
 
           console.log("✅ Room created:", roomId);
-
           io.to(roomId).emit("match-found");
           return;
         }
@@ -123,22 +121,21 @@ io.on("connection", (socket) => {
   }
 
   // ================= SEND MESSAGE =================
-  socket.on("send-message", async (rawMessage) => {
+  socket.on("send-message", async (payload) => {
 
-    const text = sanitizeMessage(rawMessage);
+    const raw = typeof payload === "string" ? payload : payload?.text;
+    const replyTo = payload?.replyTo || null;
+
+    const text = sanitizeMessage(raw);
     if (!text) return;
 
     const now = Date.now();
     const lastMessage = messageLimits.get(socket.id) || 0;
-
-    if (now - lastMessage < 800) return; // anti-spam
+    if (now - lastMessage < 800) return;
     messageLimits.set(socket.id, now);
 
     const roomId = activeRooms.get(socket.id);
-    if (!roomId) {
-      console.log("❌ No room for:", socket.id);
-      return;
-    }
+    if (!roomId) return;
 
     const roomSockets = await io.in(roomId).fetchSockets();
     if (roomSockets.length < 2) {
@@ -147,31 +144,72 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const timestamp = Date.now();
-
-    try {
-      await Room.updateOne(
-        { roomId },
-        {
-          $push: {
-            messages: {
-              senderId: socket.id,
-              text,
-              timestamp
-            }
-          }
-        }
-      );
-    } catch (err) {
-      console.error("DB Error:", err.message);
-    }
-
-    io.to(roomId).emit("receive-message", {
+    const message = {
+      messageId: uuidv4(),
       senderId: socket.id,
       text,
-      timestamp
+      timestamp: now,
+      replyTo,
+      reactions: []
+    };
+
+    await Room.updateOne(
+      { roomId },
+      { $push: { messages: message } }
+    );
+
+    io.to(roomId).emit("receive-message", message);
+  });
+
+  // ================= REACTION TOGGLE =================
+  socket.on("toggle-reaction", async ({ messageId, emoji }) => {
+
+    const roomId = activeRooms.get(socket.id);
+    if (!roomId) return;
+
+    const room = await Room.findOne({ roomId });
+    if (!room) return;
+
+    const message = room.messages.find(m => m.messageId === messageId);
+    if (!message) return;
+
+    const existing = message.reactions.find(r => r.userId === socket.id);
+
+    if (existing) {
+      message.reactions = message.reactions.filter(r => r.userId !== socket.id);
+    } else {
+      message.reactions.push({ userId: socket.id, emoji });
+    }
+
+    await room.save();
+
+    io.to(roomId).emit("reaction-updated", {
+      messageId,
+      reactions: message.reactions
+    });
+  });
+
+  // ================= REPORT USER =================
+  socket.on("report-user", async ({ messageId, reason }) => {
+
+    const roomId = activeRooms.get(socket.id);
+    if (!roomId) return;
+
+    const room = await Room.findOne({ roomId });
+    if (!room) return;
+
+    const message = room.messages.find(m => m.messageId === messageId);
+    if (!message) return;
+
+    await Report.create({
+      reporter: socket.id,
+      reported: message.senderId,
+      reason,
+      roomId,
+      messageId
     });
 
+    socket.emit("report-success");
   });
 
   // ================= TYPING =================
@@ -211,9 +249,7 @@ io.on("connection", (socket) => {
 
     io.to(roomId).emit("partner-left");
 
-    try {
-      await Room.deleteOne({ roomId });
-    } catch {}
+    try { await Room.deleteOne({ roomId }); } catch {}
 
     const sockets = await io.in(roomId).fetchSockets();
     sockets.forEach(s => {
@@ -234,9 +270,7 @@ io.on("connection", (socket) => {
     if (roomId) {
       io.to(roomId).emit("partner-left");
 
-      try {
-        await Room.deleteOne({ roomId });
-      } catch {}
+      try { await Room.deleteOne({ roomId }); } catch {}
 
       const sockets = await io.in(roomId).fetchSockets();
       sockets.forEach(s => {
