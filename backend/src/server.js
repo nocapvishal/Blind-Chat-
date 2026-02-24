@@ -29,12 +29,27 @@ const io = new Server(server, {
   }
 });
 
+/* =========================
+   DATABASE CONNECTION
+========================= */
+
+let dbConnected = false;
+
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected"))
+  .then(() => {
+    dbConnected = true;
+    console.log("✅ MongoDB Connected");
+  })
   .catch(err => {
     console.error("Mongo Error:", err.message);
-    process.exit(1);
+    console.log("⚠️ Running in memory-only mode (no DB)");
   });
+
+/* =========================
+   MEMORY STORE (DEV MODE)
+========================= */
+
+const memoryRooms = new Map(); // roomId -> { users: [], messages: [] }
 
 const matching = new MatchingService();
 const onlineCounts = { friendship: 0, dating: 0, casual: 0 };
@@ -48,11 +63,16 @@ function updateOnlineCounts() {
   io.emit("online-counts", onlineCounts);
 }
 
+/* =========================
+   SOCKET CONNECTION
+========================= */
+
 io.on("connection", (socket) => {
 
   console.log("➜ Connected:", socket.id);
 
-  // ================= START SEARCH =================
+  /* ================= START SEARCH ================= */
+
   socket.on("start-search", (data) => {
     const gender = normalizeGender(data.gender);
     const preference = normalizePreference(data.preference);
@@ -106,11 +126,18 @@ io.on("connection", (socket) => {
           socketA.data.roomId = roomId;
           socketB.data.roomId = roomId;
 
-          await Room.create({
-            roomId,
-            users: [userA.id, userB.id],
-            messages: []
-          });
+          if (dbConnected) {
+            await Room.create({
+              roomId,
+              users: [userA.id, userB.id],
+              messages: []
+            });
+          } else {
+            memoryRooms.set(roomId, {
+              users: [userA.id, userB.id],
+              messages: []
+            });
+          }
 
           console.log("✅ Room created:", roomId);
           io.to(roomId).emit("match-found");
@@ -120,7 +147,8 @@ io.on("connection", (socket) => {
     }
   }
 
-  // ================= SEND MESSAGE =================
+  /* ================= SEND MESSAGE ================= */
+
   socket.on("send-message", async (payload) => {
 
     const raw = typeof payload === "string" ? payload : payload?.text;
@@ -137,13 +165,6 @@ io.on("connection", (socket) => {
     const roomId = activeRooms.get(socket.id);
     if (!roomId) return;
 
-    const roomSockets = await io.in(roomId).fetchSockets();
-    if (roomSockets.length < 2) {
-      socket.emit("partner-left");
-      activeRooms.delete(socket.id);
-      return;
-    }
-
     const message = {
       messageId: uuidv4(),
       senderId: socket.id,
@@ -153,103 +174,83 @@ io.on("connection", (socket) => {
       reactions: []
     };
 
-    await Room.updateOne(
-      { roomId },
-      { $push: { messages: message } }
-    );
+    if (dbConnected) {
+      await Room.updateOne(
+        { roomId },
+        { $push: { messages: message } }
+      );
+    } else {
+      const room = memoryRooms.get(roomId);
+      if (room) room.messages.push(message);
+    }
 
     io.to(roomId).emit("receive-message", message);
   });
 
-  // ================= REACTION TOGGLE =================
+  /* ================= REACTION ================= */
+
   socket.on("toggle-reaction", async ({ messageId, emoji }) => {
 
     const roomId = activeRooms.get(socket.id);
     if (!roomId) return;
 
-    const room = await Room.findOne({ roomId });
-    if (!room) return;
+    if (dbConnected) {
+      const room = await Room.findOne({ roomId });
+      if (!room) return;
 
-    const message = room.messages.find(m => m.messageId === messageId);
-    if (!message) return;
+      const message = room.messages.find(m => m.messageId === messageId);
+      if (!message) return;
 
-    const existing = message.reactions.find(r => r.userId === socket.id);
+      const existing = message.reactions.find(r => r.userId === socket.id);
 
-    if (existing) {
-      message.reactions = message.reactions.filter(r => r.userId !== socket.id);
+      if (existing) {
+        message.reactions = message.reactions.filter(r => r.userId !== socket.id);
+      } else {
+        message.reactions.push({ userId: socket.id, emoji });
+      }
+
+      await room.save();
+
+      io.to(roomId).emit("reaction-updated", {
+        messageId,
+        reactions: message.reactions
+      });
+
     } else {
-      message.reactions.push({ userId: socket.id, emoji });
-    }
+      const room = memoryRooms.get(roomId);
+      if (!room) return;
 
-    await room.save();
+      const message = room.messages.find(m => m.messageId === messageId);
+      if (!message) return;
 
-    io.to(roomId).emit("reaction-updated", {
-      messageId,
-      reactions: message.reactions
-    });
-  });
+      const existing = message.reactions.find(r => r.userId === socket.id);
 
-  // ================= REPORT USER =================
-  socket.on("report-user", async ({ messageId, reason }) => {
+      if (existing) {
+        message.reactions = message.reactions.filter(r => r.userId !== socket.id);
+      } else {
+        message.reactions.push({ userId: socket.id, emoji });
+      }
 
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
-
-    const room = await Room.findOne({ roomId });
-    if (!room) return;
-
-    const message = room.messages.find(m => m.messageId === messageId);
-    if (!message) return;
-
-    await Report.create({
-      reporter: socket.id,
-      reported: message.senderId,
-      reason,
-      roomId,
-      messageId
-    });
-
-    socket.emit("report-success");
-  });
-
-  // ================= TYPING =================
-  socket.on("typing", () => {
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
-    socket.to(roomId).emit("partner-typing");
-  });
-
-  socket.on("stop-typing", () => {
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
-    socket.to(roomId).emit("partner-stop-typing");
-  });
-
-  // ================= SEEN =================
-  socket.on("message-seen", () => {
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
-    socket.to(roomId).emit("message-seen");
-  });
-
-  // ================= RECONNECT =================
-  socket.on("reconnect-request", () => {
-    const roomId = activeRooms.get(socket.id);
-    if (roomId) {
-      socket.join(roomId);
-      socket.emit("match-found");
+      io.to(roomId).emit("reaction-updated", {
+        messageId,
+        reactions: message.reactions
+      });
     }
   });
 
-  // ================= SKIP =================
+  /* ================= SKIP ================= */
+
   socket.on("skip-chat", async () => {
-
     const roomId = activeRooms.get(socket.id);
     if (!roomId) return;
 
     io.to(roomId).emit("partner-left");
 
-    try { await Room.deleteOne({ roomId }); } catch {}
+    if (dbConnected) {
+      try { await Room.deleteOne({ roomId }); } catch {}
+    } else {
+      memoryRooms.delete(roomId);
+    }
 
     const sockets = await io.in(roomId).fetchSockets();
     sockets.forEach(s => {
@@ -258,7 +259,8 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ================= DISCONNECT =================
+  /* ================= DISCONNECT ================= */
+
   socket.on("disconnect", async () => {
 
     matching.remove(socket.id);
@@ -270,7 +272,11 @@ io.on("connection", (socket) => {
     if (roomId) {
       io.to(roomId).emit("partner-left");
 
-      try { await Room.deleteOne({ roomId }); } catch {}
+      if (dbConnected) {
+        try { await Room.deleteOne({ roomId }); } catch {}
+      } else {
+        memoryRooms.delete(roomId);
+      }
 
       const sockets = await io.in(roomId).fetchSockets();
       sockets.forEach(s => {
@@ -283,6 +289,10 @@ io.on("connection", (socket) => {
   });
 
 });
+
+/* =========================
+   BASIC ROUTE
+========================= */
 
 app.get("/", (req, res) => {
   res.send("BlindChat Backend Running 🚀");
