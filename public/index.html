@@ -11,34 +11,40 @@
 
 <!-- EMAIL SCREEN -->
 <div id="email-screen" class="screen active">
-<h1>Blind Chat in Campus 💜</h1>
-<input id="emailInput" placeholder="yourname@pondiuni.ac.in">
-<button id="verifyBtn">Continue</button>
-<p id="emailError"></p>
+  <h1>Blind Chat in Campus 💜</h1>
+  <input id="emailInput" placeholder="yourname@pondiuni.ac.in">
+  <button id="verifyBtn">Continue</button>
+  
+  <div id="otp-section" style="display: none; margin-top: 20px;">
+    <input id="otpInput" placeholder="Enter 6-digit code">
+    <button id="submitOtpBtn">Verify Code</button>
+  </div>
+  
+  <p id="emailError"></p>
 </div>
 
 <!-- PROFILE SCREEN -->
 <div id="profile-screen" class="screen">
-<input id="nickname" placeholder="Nickname">
+  <input id="nickname" placeholder="Nickname">
 
-<select id="gender">
-<option>Male</option>
-<option>Female</option>
-</select>
+  <select id="gender">
+    <option value="male">Male</option>
+    <option value="female">Female</option>
+  </select>
 
-<select id="prefGender">
-<option value="Any">Match with Anyone</option>
-<option>Male</option>
-<option>Female</option>
-</select>
+  <select id="prefGender">
+    <option value="any">Match with Anyone</option>
+    <option value="male">Male</option>
+    <option value="female">Female</option>
+  </select>
 
-<select id="intent">
-<option>Friends</option>
-<option>Dating</option>
-<option>Casual</option>
-</select>
+  <select id="intent">
+    <option value="friends">Friends</option>
+    <option value="dating">Dating</option>
+    <option value="casual">Casual</option>
+  </select>
 
-<button id="startBtn">Start Chat</button>
+  <button id="startBtn">Start Chat</button>
 </div>
 
 <!-- SEARCH SCREEN -->
@@ -69,7 +75,7 @@
 </footer>
 
 </div>
-<script src="/socket.io/socket.io.js"></script>
+<script src="http://localhost:3001/socket.io/socket.io.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
