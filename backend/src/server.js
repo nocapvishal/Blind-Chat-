@@ -5,7 +5,8 @@ const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const helmet = require("helmet");
 const { v4: uuidv4 } = require("uuid");
-
+const nodemailer = require("nodemailer");
+const { createClient } = require("redis");
 const Room = require("./models/Room");
 const Report = require("./models/Report");
 const MatchingService = require("./services/matching.service");
@@ -46,6 +47,24 @@ mongoose.connect(process.env.MONGO_URI)
   });
 
 /* =========================
+   REDIS CONNECTION (ADD THIS HERE)
+========================= */
+const redisClient = createClient({
+  url: process.env.REDIS_URL
+});
+
+redisClient.on('error', (err) => console.log('❌ Redis Client Error', err));
+
+(async () => {
+  try {
+    await redisClient.connect();
+    console.log("✅ Upstash Redis Connected");
+  } catch (err) {
+    console.error("❌ Redis Connection Failed:", err.message);
+  }
+})();
+
+/* =========================
    MEMORY STORE (DEV MODE)
 ========================= */
 
@@ -67,227 +86,144 @@ function updateOnlineCounts() {
    SOCKET CONNECTION
 ========================= */
 
-io.on("connection", (socket) => {
+// OTP Store and Email Setup
+const otpStore = new Map();
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT, // Usually 2525 or 587
+  secure: false, 
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    rejectUnauthorized: false // Helps avoid local certificate errors
+  }
+});
 
+// Add this to verify the connection on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.log("❌ Mailer Connection Error:", error.message);
+  } else {
+    console.log("✅ Mailtrap Ready to Send Emails");
+  }
+});
+
+// --- UPDATE THE SOCKET CONNECTION BLOCK ---
+io.on("connection", (socket) => {
   console.log("➜ Connected:", socket.id);
 
-  /* ================= START SEARCH ================= */
-
-  socket.on("start-search", (data) => {
-    const gender = normalizeGender(data.gender);
-    const preference = normalizePreference(data.preference);
-    const intent = normalizeIntent(data.intent);
-
-    if (!gender || !preference || !intent) return;
-
-    matching.add({
-      id: socket.id,
-      gender,
-      preference,
-      intent,
-      joinedAt: Date.now()
-    });
-
-    updateOnlineCounts();
-    tryMatch();
-  });
-
-  socket.on("cancel-search", () => {
-    matching.remove(socket.id);
-    updateOnlineCounts();
-  });
-
-  async function tryMatch() {
-    const users = [...matching.users].sort((a, b) => a.joinedAt - b.joinedAt);
-
-    for (let i = 0; i < users.length; i++) {
-      for (let j = i + 1; j < users.length; j++) {
-
-        if (matching.canMatch(users[i], users[j])) {
-
-          const userA = users[i];
-          const userB = users[j];
-          const roomId = "room-" + Date.now();
-
-          matching.remove(userA.id);
-          matching.remove(userB.id);
-          updateOnlineCounts();
-
-          const socketA = io.sockets.sockets.get(userA.id);
-          const socketB = io.sockets.sockets.get(userB.id);
-          if (!socketA || !socketB) return;
-
-          socketA.join(roomId);
-          socketB.join(roomId);
-
-          activeRooms.set(userA.id, roomId);
-          activeRooms.set(userB.id, roomId);
-
-          socketA.data.roomId = roomId;
-          socketB.data.roomId = roomId;
-
-          if (dbConnected) {
-            await Room.create({
-              roomId,
-              users: [userA.id, userB.id],
-              messages: []
-            });
-          } else {
-            memoryRooms.set(roomId, {
-              users: [userA.id, userB.id],
-              messages: []
-            });
-          }
-
-          console.log("✅ Room created:", roomId);
-          io.to(roomId).emit("match-found");
-          return;
-        }
-      }
+  // 1. OTP Logic
+  socket.on("send-otp", async (email) => {
+    if (!email.toLowerCase().endsWith("@pondiuni.ac.in")) {
+      return socket.emit("email-invalid", "Use @pondiuni.ac.in only");
     }
-  }
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    otpStore.set(email, otp);
+    
+    try {
+      await transporter.sendMail({
+        from: '"BlindChat Support" <noreply@blindchat.in>',
+        to: email,
+        subject: "Your Campus Verification Code",
+        text: `Welcome! Your verification code is: ${otp}`
+      });
+      console.log(`📧 OTP sent to ${email}`);
+      socket.emit("otp-sent");
+    } catch (err) { 
+      console.error("Mailer Error Details:", err); // This tells us the real problem
+      socket.emit("email-invalid", "Email failed to send. Check server logs."); 
+    }
+  });
 
-  /* ================= SEND MESSAGE ================= */
+  socket.on("verify-otp", ({ email, otp }) => {
+    if (otpStore.get(email) === otp) {
+      otpStore.delete(email);
+      socket.emit("email-valid");
+    } else {
+      socket.emit("email-invalid", "Wrong code!");
+    }
+  });
 
-  socket.on("send-message", async (payload) => {
-
-    const raw = typeof payload === "string" ? payload : payload?.text;
-    const replyTo = payload?.replyTo || null;
-
-    const text = sanitizeMessage(raw);
-    if (!text) return;
-
-    const now = Date.now();
-    const lastMessage = messageLimits.get(socket.id) || 0;
-    if (now - lastMessage < 800) return;
-    messageLimits.set(socket.id, now);
-
+  // 2. Fixed Message Logic (Matches your app.js)
+  socket.on("message", async (text) => {
     const roomId = activeRooms.get(socket.id);
     if (!roomId) return;
 
     const message = {
       messageId: uuidv4(),
       senderId: socket.id,
-      text,
-      timestamp: now,
-      replyTo,
-      reactions: []
+      text: sanitizeMessage(text),
+      timestamp: Date.now()
     };
 
-    if (dbConnected) {
-      await Room.updateOne(
-        { roomId },
-        { $push: { messages: message } }
-      );
-    } else {
-      const room = memoryRooms.get(roomId);
-      if (room) room.messages.push(message);
-    }
-
-    io.to(roomId).emit("receive-message", message);
-  });
-
-  /* ================= REACTION ================= */
-
-  socket.on("toggle-reaction", async ({ messageId, emoji }) => {
-
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
+    // This sends it back to BOTH people so the UI updates
+    io.to(roomId).emit("message", message);
 
     if (dbConnected) {
-      const room = await Room.findOne({ roomId });
-      if (!room) return;
-
-      const message = room.messages.find(m => m.messageId === messageId);
-      if (!message) return;
-
-      const existing = message.reactions.find(r => r.userId === socket.id);
-
-      if (existing) {
-        message.reactions = message.reactions.filter(r => r.userId !== socket.id);
-      } else {
-        message.reactions.push({ userId: socket.id, emoji });
-      }
-
-      await room.save();
-
-      io.to(roomId).emit("reaction-updated", {
-        messageId,
-        reactions: message.reactions
-      });
-
-    } else {
-      const room = memoryRooms.get(roomId);
-      if (!room) return;
-
-      const message = room.messages.find(m => m.messageId === messageId);
-      if (!message) return;
-
-      const existing = message.reactions.find(r => r.userId === socket.id);
-
-      if (existing) {
-        message.reactions = message.reactions.filter(r => r.userId !== socket.id);
-      } else {
-        message.reactions.push({ userId: socket.id, emoji });
-      }
-
-      io.to(roomId).emit("reaction-updated", {
-        messageId,
-        reactions: message.reactions
-      });
+      await Room.updateOne({ roomId }, { $push: { messages: message } });
     }
   });
 
-  /* ================= SKIP ================= */
+  // ... keep your start-search, skip-chat, and disconnect logic here ...
+  socket.on("start-chat", (profile) => {
+  console.log(`🔎 ${profile.nickname} is looking for a match...`);
 
-  socket.on("skip-chat", async () => {
-    const roomId = activeRooms.get(socket.id);
-    if (!roomId) return;
+  const user = {
+    id: socket.id,
+    nickname: profile.nickname || "Student",
+    gender: profile.gender,
+    preference: profile.prefGender, // Aligning 'prefGender' from app.js to 'preference' for the class
+    intent: profile.intent
+  };
 
-    io.to(roomId).emit("partner-left");
+  // 1. Check for an existing match BEFORE adding the new user to the list
+  const partner = matching.users.find(u => matching.canMatch(user, u));
 
-    if (dbConnected) {
-      try { await Room.deleteOne({ roomId }); } catch {}
-    } else {
-      memoryRooms.delete(roomId);
+  if (partner) {
+    const roomId = `room-${uuidv4()}`;
+    
+    // Remove partner from waiting list
+    matching.remove(partner.id);
+
+    // Join the room
+    socket.join(roomId);
+    const partnerSocket = io.sockets.sockets.get(partner.id);
+    if (partnerSocket) partnerSocket.join(roomId);
+
+    activeRooms.set(socket.id, roomId);
+    activeRooms.set(partner.id, roomId);
+
+    // ─── UPDATED LOGIC HERE ───
+    // Tell the current user they matched with the partner
+    socket.emit("matched", partner.nickname);
+
+    // Tell the partner they matched with the current user
+    if (partnerSocket) {
+      partnerSocket.emit("matched", user.nickname);
     }
+    // ──────────────────────────
 
-    const sockets = await io.in(roomId).fetchSockets();
-    sockets.forEach(s => {
-      s.leave(roomId);
-      activeRooms.delete(s.id);
-    });
-  });
+    console.log(`✅ MATCH: ${user.nickname} <-> ${partner.nickname}`);
+  } else {
+    // 2. If no match found, add this user to the waiting list
+    matching.add(user);
+    console.log(`⏳ No match yet. ${user.nickname} added to queue.`);
+  }
+});
 
-  /* ================= DISCONNECT ================= */
-
-  socket.on("disconnect", async () => {
-
+  // 4. Handle Disconnect/Cleanup
+ socket.on("disconnect", () => {
+  console.log("➜ Disconnected:", socket.id);
+  
+  // Use 'remove' because that's what is in your class
+  if (matching && typeof matching.remove === 'function') {
     matching.remove(socket.id);
-    updateOnlineCounts();
-    messageLimits.delete(socket.id);
-
-    const roomId = activeRooms.get(socket.id);
-
-    if (roomId) {
-      io.to(roomId).emit("partner-left");
-
-      if (dbConnected) {
-        try { await Room.deleteOne({ roomId }); } catch {}
-      } else {
-        memoryRooms.delete(roomId);
-      }
-
-      const sockets = await io.in(roomId).fetchSockets();
-      sockets.forEach(s => {
-        s.leave(roomId);
-        activeRooms.delete(s.id);
-      });
-    }
-
-    console.log("✕ Disconnected:", socket.id);
-  });
-
+  }
+  
+  activeRooms.delete(socket.id);
+});
 });
 
 /* =========================
